@@ -16,6 +16,7 @@ int vdisk_fd; // Global virtual disk file descriptor. Global within the library.
 // ========================================================
 
 
+
 // read block k from disk (virtual disk) into buffer block.
 // size of the block is BLOCKSIZE.
 // space for block must be allocated outside of this function.
@@ -51,6 +52,32 @@ int write_block (void *block, int k)
     return 0; 
 }
 
+void set_bit(void *bitmap, int nblock, unsigned int bit_index){
+    void *curr = bitmap + 4096 * nblock;
+    int char_index = bit_index / 8;
+    int index = 7 - (bit_index % 8);
+    curr = curr + char_index * sizeof(char);
+    *(char *) curr |= 1UL << index;
+}
+
+int get_bit(void *bitmap, int nblock, unsigned int bit_index){
+    void *curr = bitmap + 4096 * nblock;
+    int char_index = bit_index / 8;
+    int index = 7 - (bit_index % 8);
+    curr = curr + char_index * sizeof(char);
+    if ((*(char *) curr & 1UL << index) == 0)
+        return 0;
+    else
+        return 1;
+}
+
+void clear_bit(void *bitmap, int nblock, unsigned int bit_index){
+    void *curr = bitmap + 4096 * nblock;
+    int char_index = bit_index / 8;
+    int index = 7 - (bit_index % 8);
+    curr = curr + char_index * sizeof(char);
+    *(char *) curr &= ~(1UL << index);
+}
 
 /**********************************************************************
    The following functions are to be called by applications directly. 
@@ -63,9 +90,10 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
     int size;
     int num = 1;
     int count;
+    int stat;
     size  = num << m;
     count = size / BLOCKSIZE;
-    //    printf ("%d %d", m, size);
+    // printf ("%d %d %d", m, size, count);
     sprintf (command, "dd if=/dev/zero of=%s bs=%d count=%d",
              vdiskname, BLOCKSIZE, count);
     //printf ("executing command = %s\n", command);
@@ -73,7 +101,45 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
 
     // now write the code to format the disk below.
     // .. your code...
-    
+    void *bitmap_buff = calloc(BLOCKSIZE, BLOCKSIZE);
+
+    //superblock
+    vdisk_fd = open(vdiskname, O_RDWR);
+    void *block = calloc(BLOCKSIZE, BLOCKSIZE);
+    *(int *) block = size;
+    stat = write_block(block, 0);
+    free(block);
+    if (stat == -1)
+        return -1;
+
+    //bitmaps
+    unsigned int i;
+    for (i = 0; i < 13; ++i)
+        set_bit(bitmap_buff, 0, i);
+
+    stat = write_block(bitmap_buff, 1);
+    if (stat == -1)
+        return -1;
+
+    //root directory
+    block = calloc(BLOCKSIZE / 128, BLOCKSIZE);
+    void *curr = block;
+    for (i = 0; i < 128; ++i){
+        *(int *) (curr + 110) = -1;    
+        curr += 128;
+    }
+
+    for (i = 0; i < 4; ++i){
+        stat = write_block(block, (i + 5));
+        if (stat == -1)
+            return -1;
+    }
+
+    free(block);
+
+    fsync(vdisk_fd);
+    close(vdisk_fd);
+    free(bitmap_buff);
     return (0); 
 }
 

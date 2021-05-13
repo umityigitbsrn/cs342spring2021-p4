@@ -4,7 +4,7 @@
 all: libsimplefs.a create_format app
 
 libsimplefs.a: 	simplefs.c
-	gcc -Wall -c simplefs.c
+	gcc -Wall -g -c simplefs.c
 	ar -cvq libsimplefs.a simplefs.o
 	ranlib libsimplefs.a
 
