@@ -5,17 +5,44 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <string.h>
 #include "simplefs.h"
 
+struct directory_item {
+    char name[110];
+    int inode;
+};
+
+struct file_control_block {
+    int available;
+    int index_block;
+};
+
+// file index 0 + 13 blocks equals to our initial pointer location
+// when we cast into our pointer to index block we get our index blocks
+struct index_block { 
+    int index_arr[1024];
+};
+
+// open file entry stores current file names, their modes (APPEND - 1, READ - 0)
+// open file entry is basically a cache for root directory   
+// inode = directory item's inode, offset points to the beginning of the directory
+struct open_file_entry {
+    char name[110];
+    int inode;
+    int mode;
+    int offset;
+};
 
 // Global Variables =======================================
 int vdisk_fd; // Global virtual disk file descriptor. Global within the library.
               // Will be assigned with the vsfs_mount call.
               // Any function in this file can use this.
               // Applications will not use  this directly. 
+
+struct open_file_entry open_file_table[16]; // max # of currently opened files
+
 // ========================================================
-
-
 
 // read block k from disk (virtual disk) into buffer block.
 // size of the block is BLOCKSIZE.
@@ -125,7 +152,10 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
     block = calloc(BLOCKSIZE / 128, BLOCKSIZE);
     void *curr = block;
     for (i = 0; i < 128; ++i){
-        *(int *) (curr + 110) = -1;    
+        struct directory_item dir;
+        memset(dir.name, 0, sizeof(dir.name));
+        dir.inode = -1;
+        *(struct directory_item *) curr = dir;    
         curr += 128;
     }
 
@@ -134,7 +164,24 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
         if (stat == -1)
             return -1;
     }
+    free(block);
+    
+    // FCB
+    block = calloc(BLOCKSIZE / 128, BLOCKSIZE);
+    curr = block;
+    
+    for (i = 0; i < 128; ++i){
+        struct file_control_block fcb;
+        fcb.available = 0;
+        *(struct file_control_block *) curr = fcb;    
+        curr += 128;
+    }
 
+    for (i = 0; i < 4; ++i){
+        stat = write_block(block, (i + 9));
+        if (stat == -1)
+            return -1;
+    }
     free(block);
 
     fsync(vdisk_fd);
@@ -149,7 +196,15 @@ int sfs_mount (char *vdiskname)
 {
     // simply open the Linux file vdiskname and in this
     // way make it ready to be used for other operations.
-    // vdisk_fd is global; hence other function can use it. 
+    // vdisk_fd is global; hence other function can use it.
+    
+    // init open_file_table
+    int i;
+    for (i = 0; i < 15; ++i){
+        // memset(open_file_table[i].name, 0, sizeof(open_file_table[i].name));
+        open_file_table[i].inode = -1;
+    }
+
     vdisk_fd = open(vdiskname, O_RDWR); 
     return(0);
 }
@@ -166,7 +221,73 @@ int sfs_umount ()
 
 int sfs_create(char *filename)
 {
-    return (0);
+    int offset = BLOCKSIZE * 5; // points to beg. root dir
+    void *buff = calloc(1, 128);
+    lseek(vdisk_fd, (off_t) offset, SEEK_SET);
+    
+    int size = 0;
+    while(size < 128){
+        read(vdisk_fd, buff, 128);
+        if ((*(struct directory_item *) buff).inode == -1){
+            strcpy((*(struct directory_item *) buff).name, filename);
+
+            // we found the root dir
+            // now we need to find our available FCB
+            offset = BLOCKSIZE * 9;
+            void *buff2 = calloc(1, 128);
+            lseek(vdisk_fd, (off_t) offset, SEEK_SET);
+
+            int size2 = 0;
+            while (size2 < 128){
+                read(vdisk_fd, buff2, 128);
+                if ((*(struct file_control_block *) buff2).available == 0){
+                    (*(struct directory_item *) buff).inode = size2;
+                    (*(struct file_control_block *) buff2).available = 1;
+
+                    // we found the FCB location (inode)
+                    // now we need to add index_block to the FCB
+                    // by checking bitmap (bit with value 0)
+                    void *buff3 = calloc(1, BLOCKSIZE);
+                    int i;
+                    for (i = 1; i <= 4; ++i){
+                        read_block(buff3, i);
+                        unsigned int j;
+                        for (j = 0; j < 32768; ++j){
+                            if (get_bit(buff3, 0, j) == 0){
+                                set_bit(buff3, 0, j);
+                                write_block(buff3, i);
+                                (*(struct file_control_block *) buff2).index_block = j + ((i-1) * (1 << 15));
+                                
+                                offset = (9 * BLOCKSIZE) + (128 * size2);
+                                lseek(vdisk_fd, (off_t) offset, SEEK_SET);
+                                write(vdisk_fd, buff2, 128);
+
+                                offset = (5 * BLOCKSIZE) + (128 * size);
+                                lseek(vdisk_fd, (off_t) offset, SEEK_SET);
+                                write(vdisk_fd, buff, 128);
+
+                                free(buff3);
+                                free(buff2);
+                                free(buff);
+                                return 0;
+                            }
+                        }
+                    }
+                    free(buff3);
+                    free(buff2);
+                    free(buff);
+                    return -1;
+                }
+                size2++;
+            }
+            free(buff2);
+            free(buff);
+            return -1;
+        }
+        size++;
+    }
+    free(buff);
+    return -1;
 }
 
 
