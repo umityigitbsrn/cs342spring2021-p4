@@ -16,6 +16,7 @@ struct directory_item {
 struct file_control_block {
     int available;
     int index_block;
+    int size;
 };
 
 // file index 0 + 13 blocks equals to our initial pointer location
@@ -28,6 +29,7 @@ struct index_block {
 // open file entry is basically a cache for root directory   
 // inode = directory item's inode, offset points to the beginning of the directory
 struct open_file_entry {
+    int used;
     char name[110];
     int inode;
     int mode;
@@ -104,6 +106,14 @@ void clear_bit(void *bitmap, int nblock, unsigned int bit_index){
     int index = 7 - (bit_index % 8);
     curr = curr + char_index * sizeof(char);
     *(char *) curr &= ~(1UL << index);
+}
+
+void print_open_file_table(){
+    int i;
+    for (i = 0; i < 16; ++i)
+        if (open_file_table[i].used == 1)
+            printf("name: %s, inode: %d, mode: %d, offset: %d\n", 
+                open_file_table[i].name, open_file_table[i].inode, open_file_table[i].mode, open_file_table[i].offset);
 }
 
 /**********************************************************************
@@ -203,6 +213,7 @@ int sfs_mount (char *vdiskname)
     for (i = 0; i < 15; ++i){
         // memset(open_file_table[i].name, 0, sizeof(open_file_table[i].name));
         open_file_table[i].inode = -1;
+        open_file_table[i].used = 0;
     }
 
     vdisk_fd = open(vdiskname, O_RDWR); 
@@ -257,7 +268,18 @@ int sfs_create(char *filename)
                                 set_bit(buff3, 0, j);
                                 write_block(buff3, i);
                                 (*(struct file_control_block *) buff2).index_block = j + ((i-1) * (1 << 15));
-                                
+
+                                void *index_buff = calloc(1, BLOCKSIZE);
+                                void *index_curr = index_buff;
+                                int k;
+                                for (k = 0; k < (BLOCKSIZE / 4); ++k){
+                                    *(int *) index_curr = -1;
+                                    index_curr += sizeof(int);
+                                }
+
+                                write_block(index_buff, (*(struct file_control_block *) buff2).index_block);
+                                free(index_buff);
+
                                 offset = (9 * BLOCKSIZE) + (128 * size2);
                                 lseek(vdisk_fd, (off_t) offset, SEEK_SET);
                                 write(vdisk_fd, buff2, 128);
@@ -293,30 +315,380 @@ int sfs_create(char *filename)
 
 int sfs_open(char *file, int mode)
 {
-    return (0); 
+    int i;
+    for (i = 0; i < 16; ++i){
+        if (open_file_table[i].used == 0){
+            void *block = calloc(1, BLOCKSIZE);
+            void *curr;
+            int j;
+            for (j = 0; j < 4; ++j){
+                curr = block;
+                read_block(curr, j + 5);
+                int k;
+                for (k = 0; k < 128; ++k){
+                    if (strcmp((*(struct directory_item *) curr).name, file) == 0 && (*(struct directory_item *) curr).inode != -1){
+                        open_file_table[i].inode = (*(struct directory_item *) curr).inode;
+
+                        int block_num = (*(struct directory_item *) curr).inode / 32;
+
+                        int fcb_offset = (block_num + 9) * BLOCKSIZE + ((*(struct directory_item *) curr).inode % 32) * 128;
+                        void *fcb_buff = calloc(1, BLOCKSIZE);
+
+                        read_block(fcb_buff, (block_num + 5));
+
+                        struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
+                        open_file_table[i].offset = (*(fcb_pointer + ((*(struct directory_item *) curr).inode % 32))).size % 4096;
+                        break;
+                    }
+                    curr += 128;
+                }
+
+                if (open_file_table[i].inode != -1){
+                    break;    
+                }
+            }
+            free(block);
+            
+            if (j >= 4) // cannot find the filename in the directory
+                return -1;
+                
+            strcpy(open_file_table[i].name, file);
+            open_file_table[i].mode = mode;
+            open_file_table[i].used = 1;
+            open_file_table[i].offset = 0;
+            break;
+        }
+    }
+
+    // print_open_file_table();
+
+    if (i >= 16) // all blocks are used
+        return -1;
+    else 
+        return i; // index in the open file table
 }
 
 int sfs_close(int fd){
-    return (0); 
+    open_file_table[fd].used = 0;
+    
+    int inode = open_file_table[fd].inode;
+    int block_num = inode / 32;
+    int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
+    void *fcb_buff = calloc(1, BLOCKSIZE);
+
+    read_block(fcb_buff, (block_num + 5));
+
+    struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
+    
+    (*(fcb_pointer + (inode % 32))).size = sfs_getsize(fd);
+
+    write_block(fcb_buff, (block_num + 5));
+
+    free(fcb_buff);
+    
+    return 0; 
 }
 
 int sfs_getsize (int  fd)
 {
-    return (0); 
+    int inode = open_file_table[fd].inode;
+    int block_num = inode / 32;
+    int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
+    void *fcb_buff = calloc(1, 128);
+
+    lseek(vdisk_fd, (off_t) fcb_offset, SEEK_SET);
+    read(vdisk_fd, fcb_buff, 128);
+
+    int index_block = (*(struct file_control_block *) fcb_buff).index_block;
+    free(fcb_buff);
+
+    void *index_buff = calloc(1, BLOCKSIZE);
+    read_block(index_buff, index_block);
+    void *curr = index_buff;
+    
+    int used = 0;
+
+    while((used * 4) < BLOCKSIZE && *(int *) (curr) != -1){
+        used++;
+        curr += sizeof(int);
+    }
+    int offset = open_file_table[fd].offset;
+
+    free(index_buff);
+    
+    if (offset != 0)
+        return (used - 1) * BLOCKSIZE + offset;
+    
+    return used * BLOCKSIZE; 
 }
 
 int sfs_read(int fd, void *buf, int n){
-    return (0); 
+    if (open_file_table[fd].mode == MODE_READ){
+        int inode = open_file_table[fd].inode;
+        int block_num = inode / 32;
+        int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
+        void *fcb_buff = calloc(1, 128);
+
+        lseek(vdisk_fd, (off_t) fcb_offset, SEEK_SET);
+        read(vdisk_fd, fcb_buff, 128);
+
+        int index_block = (*(struct file_control_block *) fcb_buff).index_block;
+        free(fcb_buff);
+
+        int size = 0;
+        void *read_buff_index = calloc(1, BLOCKSIZE);
+        read_block(read_buff_index, index_block);
+        int i;
+        for(i = 0; i < 1024; i++){
+            if(*(((int *)read_buff_index) + i) != -1){
+
+            }
+        }
+    }
+    return 0;
 }
 
 
 int sfs_append(int fd, void *buf, int n)
 {
-    return (0); 
+    if (open_file_table[fd].mode == MODE_APPEND){
+        int inode = open_file_table[fd].inode;
+        int block_num = inode / 32;
+        int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
+        void *fcb_buff = calloc(1, 128);
+
+        lseek(vdisk_fd, (off_t) fcb_offset, SEEK_SET);
+        read(vdisk_fd, fcb_buff, 128);
+
+        int index_block = (*(struct file_control_block *) fcb_buff).index_block;
+        free(fcb_buff);
+
+        int size = n;
+        void *buff = calloc(1, BLOCKSIZE);
+        read_block(buff, index_block);
+        int i;
+        for (i = 0; size > 0 && i < 1023; ++i){ // 1024 case
+            if ((open_file_table[fd].offset == 0 && *(int *) (buff + i * sizeof(int)) == -1) ||
+                (open_file_table[fd].offset > 0 && *(int *) (buff + i * sizeof(int)) != -1 && *(int *) (buff + (i + 1) * sizeof(int)) == -1)){
+                    if (*(int *) (buff + i * sizeof(int)) == -1){
+                        void *bitmap_buff = calloc(1, BLOCKSIZE);
+                        // Now we need to find empty block 
+
+                        int b, x = 1, t = 0;
+                        while(x <= 4 && !t){
+                            read_block(bitmap_buff, x);
+                        
+                            for(b = 0; b < 32768; b++){
+                                if(get_bit(bitmap_buff, 0, b) == 0){
+                                    set_bit(bitmap_buff,0, b);
+                                    write_block(bitmap_buff, x);
+
+                                    int* as = (int *)buff;
+                                    as[i] = b;
+                                    t = 1;
+                                    write_block(buff, index_block);
+                                    break;
+                                }
+                            }
+                            x++;
+                            free(bitmap_buff);
+                        }
+
+                        if(!t){
+                            printf("NO SPACE AVAILABLE\n");
+                            
+                            free(buff);
+                            return -1;
+                        }
+                    }
+                
+
+                    void *file_writer = calloc(1, BLOCKSIZE);
+                    
+                    int *block_loc = (int *)buff;
+
+                    read_block(file_writer, block_loc[i]);
+                    
+                    if(size <= 4096 - open_file_table[fd].offset){
+                        //fits the current block
+
+                        memcpy(file_writer + open_file_table[fd].offset, buf + n - size, size);
+
+                        open_file_table[fd].offset = (open_file_table[fd].offset + size) % 4096;
+
+                        write_block(file_writer, block_loc[i]);
+
+                        size = 0;
+
+                        free(file_writer);
+                        free(buff);
+                        return n;
+                    }
+                    else{
+                        memcpy(file_writer + open_file_table[fd].offset, buf + n - size, 4096 - open_file_table[fd].offset);
+
+                        size = size - 4096 + open_file_table[fd].offset;
+
+                        open_file_table[fd].offset = 0; 
+
+                        write_block(file_writer, block_loc[i]);
+
+                        free(file_writer);
+                    }
+
+            }
+        }
+
+        if(*(int *) (buff + 1023 * sizeof(int)) == -1){
+            void *bitmap_buff = calloc(1, BLOCKSIZE);
+            // Now we need to find empty block 
+
+            int b, x = 1, t = 0;
+            while(x <= 4 && !t){
+                read_block(bitmap_buff, x);
+            
+                for(b = 0; b < 32768; b++){
+                    if(get_bit(bitmap_buff, 0, b) == 0){
+                        set_bit(bitmap_buff,0, b);
+                        write_block(bitmap_buff, x);
+
+                        int* as = (int *)buff;
+                        as[i] = b;
+                        t = 1;
+                        write_block(buff, index_block);
+                        break;
+                    }
+                }
+                x++;
+                free(bitmap_buff);
+            }
+            if(!t){
+                printf("NO SPACE AVAILABLE\n");
+                
+                free(buff);
+                return -1;
+            }
+            void *file_writer = calloc(1, BLOCKSIZE);
+
+            read_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+
+            if(size > 4096){
+                memcpy(file_writer, buf + n - size, 4096);
+
+                size -= 4096;
+                
+                write_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+
+                free(file_writer);
+                free(buff);
+
+                return n-size;
+            }
+            
+            memcpy(file_writer, buf + n - size, size);
+
+            open_file_table[fd].offset = size;
+
+            write_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+
+            free(file_writer);
+            free(buff);
+            return n;
+        }
+       
+        else if((open_file_table[fd].offset > 0 && *(int *) (buff + 1023 * sizeof(int)) != -1)){
+            void *file_writer = calloc(1, BLOCKSIZE);
+
+            read_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+            
+            if(size > 4096 - open_file_table[fd].offset){
+                memcpy(file_writer + open_file_table[fd].offset, buf + n - size, 4096 - open_file_table[fd].offset);
+
+                open_file_table[fd].offset = 0;
+                size = size - 4096 + open_file_table[fd].offset;
+                write_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+
+                free(file_writer);
+                free(buff);
+
+                return n - size;
+            }else{
+                memcpy(file_writer + open_file_table[fd].offset, buf + n - size, size);
+
+                write_block(file_writer, *(int *) (buff + 1023 * sizeof(int)));
+
+                free(file_writer);
+                free(buff);
+
+                return n;
+            }
+
+
+        }
+
+        free(buff);
+        return n - size;
+        // check the return value
+    } else
+        return -1; 
 }
 
 int sfs_delete(char *filename)
 {
-    return (0); 
+    void *buff = calloc(1, BLOCKSIZE);
+    int i;
+    for (i = 0; i < 4; ++i){
+        read_block(buff, i + 5);
+        int j;
+        for (j = 0; j < 32; ++j){
+            if (strcmp((*(struct directory_item *) (buff + j * 128)).name, filename) == 0){
+                int inode = (*(struct directory_item *) (buff + j * 128)).inode;
+                (*(struct directory_item *) (buff + j * 128)).inode = -1;
+                write_block(buff, i + 5);
+
+                int block_num = inode / 32;
+                int block_offset = inode % 32;
+                read_block(buff, block_num + 9);
+                int index_block = (*(struct file_control_block *) (buff + 128 * block_offset)).index_block;
+                (*(struct file_control_block *) (buff + 128 * block_offset)).available = 0;
+                (*(struct file_control_block *) (buff + 128 * block_offset)).size = 0;
+
+                write_block(buff, block_num + 9);
+
+                read_block(buff, index_block);
+                int *curr = (int *) buff;
+                int k;
+                for (k = 0; k < 1024 && curr[k] != -1; ++k){
+                    int bitmap_index = curr[k];
+                    int bitmap_block = bitmap_index / (1 << 15);
+                    int bitmap_offset = bitmap_index % (1 << 15);
+                    void *bitmap_buff = calloc(1, BLOCKSIZE);
+                    read_block(bitmap_buff, bitmap_block + 1);
+                    clear_bit(bitmap_buff, 0, bitmap_offset);
+                    write_block(bitmap_buff, bitmap_block + 1);
+                    free(bitmap_buff);
+                    curr[k] = -1;
+                }
+
+                int bitmap_index = index_block;
+                int bitmap_block = bitmap_index / (1 << 15);
+                int bitmap_offset = bitmap_index % (1 << 15);
+                void *bitmap_buff = calloc(1, BLOCKSIZE);
+                read_block(bitmap_buff, bitmap_block + 1);
+                clear_bit(bitmap_buff, 0, bitmap_offset);
+                write_block(bitmap_buff, bitmap_block + 1);
+                free(bitmap_buff);
+
+                write_block(buff, index_block);
+
+                free(buff);
+                return 0;
+            }
+        }
+    }
+
+    free(buff);
+
+    return (-1); 
 }
 
