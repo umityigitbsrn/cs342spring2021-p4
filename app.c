@@ -142,8 +142,8 @@ int main(int argc, char **argv)
 
     int fd, ret, i, append_count = 0, read_count = 0;
     char vdiskname[200];
-    char write_buff[64];
-    char read_buff[64]; 
+    char write_buff[1024];
+    char read_buff[1024]; 
 
     printf ("started\n");
 
@@ -171,8 +171,8 @@ int main(int argc, char **argv)
     gettimeofday(&current_time,NULL);
     double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
 
-    for (i = 0; i < 128; ++i){
-        append_count += sfs_append(fd, write_buff, 64);
+    for (i = 0; i < 64; ++i){
+        append_count += sfs_append(fd, write_buff, 1024);
     }
 
     gettimeofday(&current_time,NULL);
@@ -186,8 +186,8 @@ int main(int argc, char **argv)
     gettimeofday(&current_time,NULL);
     begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
 
-    for (i = 0; i < 128; ++i){
-        read_count += sfs_read(fd, read_buff, 64);
+    for (i = 0; i < 64; ++i){
+        read_count += sfs_read(fd, read_buff, 1024);
     }
 
     gettimeofday(&current_time,NULL);
