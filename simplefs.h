@@ -26,4 +26,6 @@ int sfs_append(int fd, void *buf, int n);
 
 int sfs_delete(char *filename);
 
+void print_open_file_table();
+
 

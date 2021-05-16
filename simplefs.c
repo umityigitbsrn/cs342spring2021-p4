@@ -34,6 +34,8 @@ struct open_file_entry {
     int inode;
     int mode;
     int offset;
+    int size;
+    int block_count;
 };
 
 // Global Variables =======================================
@@ -110,10 +112,10 @@ void clear_bit(void *bitmap, int nblock, unsigned int bit_index){
 
 void print_open_file_table(){
     int i;
-    for (i = 0; i < 16; ++i)
-        if (open_file_table[i].used == 1)
-            printf("name: %s, inode: %d, mode: %d, offset: %d\n", 
-                open_file_table[i].name, open_file_table[i].inode, open_file_table[i].mode, open_file_table[i].offset);
+    for (i = 0; i < 3; ++i)
+        // if (open_file_table[i].used == 1)
+            printf("index: %d name: %s, inode: %d, mode: %d, offset: %d, used: %d\n", i, 
+                open_file_table[i].name, open_file_table[i].inode, open_file_table[i].mode, open_file_table[i].offset, open_file_table[i].used);
 }
 
 /**********************************************************************
@@ -123,6 +125,10 @@ void print_open_file_table(){
 // this function is partially implemented.
 int create_format_vdisk (char *vdiskname, unsigned int m)
 {
+    struct timeval current_time;
+    gettimeofday(&current_time,NULL);
+    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    
     char command[1000];
     int size;
     int num = 1;
@@ -146,8 +152,10 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
     *(int *) block = size;
     stat = write_block(block, 0);
     free(block);
-    if (stat == -1)
+    if (stat == -1){
+        free(bitmap_buff);
         return -1;
+    }
 
     //bitmaps
     unsigned int i;
@@ -155,8 +163,10 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
         set_bit(bitmap_buff, 0, i);
 
     stat = write_block(bitmap_buff, 1);
-    if (stat == -1)
+    if (stat == -1){
+        free(bitmap_buff);
         return -1;
+    }
 
     //root directory
     block = calloc(BLOCKSIZE / 128, BLOCKSIZE);
@@ -171,8 +181,11 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
 
     for (i = 0; i < 4; ++i){
         stat = write_block(block, (i + 5));
-        if (stat == -1)
+        if (stat == -1){
+            free(block);
+            free(bitmap_buff);
             return -1;
+        }
     }
     free(block);
     
@@ -189,14 +202,21 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
 
     for (i = 0; i < 4; ++i){
         stat = write_block(block, (i + 9));
-        if (stat == -1)
+        if (stat == -1){
+            free(block);
+            free(bitmap_buff);
             return -1;
+        }   
     }
     free(block);
 
     fsync(vdisk_fd);
     close(vdisk_fd);
     free(bitmap_buff);
+
+    gettimeofday(&current_time,NULL);
+    double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    printf("%s with size %lu is created in %lf miliseconds\n", vdiskname, 1 << m, end_time - begin_time);
     return (0); 
 }
 
@@ -210,10 +230,11 @@ int sfs_mount (char *vdiskname)
     
     // init open_file_table
     int i;
-    for (i = 0; i < 15; ++i){
+    for (i = 0; i < 16; ++i){
         // memset(open_file_table[i].name, 0, sizeof(open_file_table[i].name));
         open_file_table[i].inode = -1;
         open_file_table[i].used = 0;
+        open_file_table[i].size = 0;
     }
 
     vdisk_fd = open(vdiskname, O_RDWR); 
@@ -224,6 +245,7 @@ int sfs_mount (char *vdiskname)
 // already implemented
 int sfs_umount ()
 {
+    printf("unmount\n");
     fsync (vdisk_fd); // copy everything in memory to disk
     close (vdisk_fd);
     return (0); 
@@ -268,6 +290,7 @@ int sfs_create(char *filename)
                                 set_bit(buff3, 0, j);
                                 write_block(buff3, i);
                                 (*(struct file_control_block *) buff2).index_block = j + ((i-1) * (1 << 15));
+                                (*(struct file_control_block *) buff2).size = 0;
 
                                 void *index_buff = calloc(1, BLOCKSIZE);
                                 void *index_curr = index_buff;
@@ -331,13 +354,15 @@ int sfs_open(char *file, int mode)
 
                         int block_num = (*(struct directory_item *) curr).inode / 32;
 
-                        int fcb_offset = (block_num + 9) * BLOCKSIZE + ((*(struct directory_item *) curr).inode % 32) * 128;
+                        // int fcb_offset = (block_num + 9) * BLOCKSIZE + ((*(struct directory_item *) curr).inode % 32) * 128;
                         void *fcb_buff = calloc(1, BLOCKSIZE);
 
-                        read_block(fcb_buff, (block_num + 5));
+                        read_block(fcb_buff, (block_num + 9));
 
-                        struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
-                        open_file_table[i].offset = (*(fcb_pointer + ((*(struct directory_item *) curr).inode % 32))).size % 4096;
+                        // struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
+                        // open_file_table[i].size = (*(fcb_pointer + ((*(struct directory_item *) curr).inode % 32))).size;
+
+                        open_file_table[i].size = (*(struct file_control_block *) (fcb_buff + ((*(struct directory_item *) curr).inode % 32) * 128)).size;
                         break;
                     }
                     curr += 128;
@@ -355,7 +380,11 @@ int sfs_open(char *file, int mode)
             strcpy(open_file_table[i].name, file);
             open_file_table[i].mode = mode;
             open_file_table[i].used = 1;
-            open_file_table[i].offset = 0;
+            if (mode == MODE_READ)
+                open_file_table[i].offset = 0;
+            else
+                open_file_table[i].offset = open_file_table[i].size % 4096;
+            open_file_table[i].block_count = 0;
             break;
         }
     }
@@ -373,16 +402,20 @@ int sfs_close(int fd){
     
     int inode = open_file_table[fd].inode;
     int block_num = inode / 32;
-    int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
+    // int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
     void *fcb_buff = calloc(1, BLOCKSIZE);
 
-    read_block(fcb_buff, (block_num + 5));
+    read_block(fcb_buff, (block_num + 9));
 
-    struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
+    // struct file_control_block* fcb_pointer = (struct file_control_block *) fcb_buff;
     
-    (*(fcb_pointer + (inode % 32))).size = sfs_getsize(fd);
+    // (*(fcb_pointer + (inode % 32))).size = sfs_getsize(fd);
 
-    write_block(fcb_buff, (block_num + 5));
+    (*(struct file_control_block *) (fcb_buff + 128 * (inode % 32))).size = sfs_getsize(fd);
+
+    // printf("Close getsize: %d\n", sfs_getsize(fd));
+
+    write_block(fcb_buff, (block_num + 9));
 
     free(fcb_buff);
     
@@ -391,6 +424,10 @@ int sfs_close(int fd){
 
 int sfs_getsize (int  fd)
 {
+    // print_open_file_table();
+
+    // printf("---- %d-/----\n", fd);
+
     int inode = open_file_table[fd].inode;
     int block_num = inode / 32;
     int fcb_offset = (block_num + 9) * BLOCKSIZE + (inode % 32) * 128;
@@ -409,6 +446,7 @@ int sfs_getsize (int  fd)
     int used = 0;
 
     while((used * 4) < BLOCKSIZE && *(int *) (curr) != -1){
+        // printf("fd: %d, used: %d\n", fd, used);
         used++;
         curr += sizeof(int);
     }
@@ -423,6 +461,10 @@ int sfs_getsize (int  fd)
 }
 
 int sfs_read(int fd, void *buf, int n){
+    struct timeval current_time;
+    gettimeofday(&current_time,NULL);
+    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+
     if (open_file_table[fd].mode == MODE_READ){
         int inode = open_file_table[fd].inode;
         int block_num = inode / 32;
@@ -435,22 +477,92 @@ int sfs_read(int fd, void *buf, int n){
         int index_block = (*(struct file_control_block *) fcb_buff).index_block;
         free(fcb_buff);
 
-        int size = 0;
+        // int size = 0;
         void *read_buff_index = calloc(1, BLOCKSIZE);
         read_block(read_buff_index, index_block);
-        int i;
-        for(i = 0; i < 1024; i++){
-            if(*(((int *)read_buff_index) + i) != -1){
 
+        int i, initial = 0;        
+        for(i = 0; i < 1024 && initial < (open_file_table[fd].block_count); i++){
+            if (*(((int *)read_buff_index) + i) != -1){
+                initial++;
+            } else {
+                return -1;
+            }
+        }
+        int remain_size = open_file_table[fd].size - (open_file_table[fd].block_count * BLOCKSIZE + open_file_table[fd].offset);
+        int remain_read = n;
+
+        int initial_size = remain_size;
+
+        if (remain_size == 0){
+            gettimeofday(&current_time,NULL);
+            double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+            printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);   
+            return 0;
+        }
+
+        // printf("Initial offset value: %d\n", open_file_table[fd].offset);
+
+        void *read_buff = calloc(1, BLOCKSIZE);
+        for(i = initial; i < 1024; i++){
+            if(*(((int *)read_buff_index) + i) != -1){
+                read_block(read_buff, i);
+                // printf("remain read: %d, remain_size: %d\n", remain_read, remain_size);
+                if (remain_read <= remain_size){
+                    if (4096 - open_file_table[fd].offset <= remain_read){
+                        // printf("IF - 1\n");
+                        memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, 4096 - open_file_table[fd].offset);
+                        remain_size -= 4096 - open_file_table[fd].offset; 
+                        remain_read -= 4096 - open_file_table[fd].offset;
+                        open_file_table[fd].offset = 0;
+                        open_file_table[fd].block_count++;
+                    } else {
+                        // printf("IF - 2\n");
+                        memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, remain_read);
+                        open_file_table[fd].offset = open_file_table[fd].offset + remain_read;
+                        free(read_buff);
+                        gettimeofday(&current_time,NULL);
+                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                        return n;
+                    }
+                } else {
+                    if (remain_size >= 4096 - open_file_table[fd].offset){
+                        // printf("IF - 3\n");
+                        memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, 4096 - open_file_table[fd].offset);
+                        remain_size -= 4096 - open_file_table[fd].offset; 
+                        remain_read -= 4096 - open_file_table[fd].offset;
+                        open_file_table[fd].offset = 0;
+                        open_file_table[fd].block_count++;
+                    } else {
+                        // printf("IF - 4\n");
+                        memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, remain_size);
+                        open_file_table[fd].offset += remain_size;
+                        free(read_buff);
+                        gettimeofday(&current_time,NULL);
+                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                        return initial_size;
+                    }
+                }
+            } else {
+                printf("Unexpected condition.\n");
+                free(read_buff);
+                return -1;
             }
         }
     }
-    return 0;
+
+    return -1;
 }
 
 
 int sfs_append(int fd, void *buf, int n)
 {
+    struct timeval current_time;
+    gettimeofday(&current_time,NULL);
+    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+
     if (open_file_table[fd].mode == MODE_APPEND){
         int inode = open_file_table[fd].inode;
         int block_num = inode / 32;
@@ -522,6 +634,9 @@ int sfs_append(int fd, void *buf, int n)
 
                         free(file_writer);
                         free(buff);
+                        gettimeofday(&current_time,NULL);
+                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                         return n;
                     }
                     else{
@@ -581,7 +696,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-
+                gettimeofday(&current_time,NULL);
+                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n-size;
             }
             
@@ -593,6 +710,9 @@ int sfs_append(int fd, void *buf, int n)
 
             free(file_writer);
             free(buff);
+            gettimeofday(&current_time,NULL);
+            double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+            printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
             return n;
         }
        
@@ -610,7 +730,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-
+                gettimeofday(&current_time,NULL);
+                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n - size;
             }else{
                 memcpy(file_writer + open_file_table[fd].offset, buf + n - size, size);
@@ -619,7 +741,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-
+                gettimeofday(&current_time,NULL);
+                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n;
             }
 
@@ -627,6 +751,9 @@ int sfs_append(int fd, void *buf, int n)
         }
 
         free(buff);
+        gettimeofday(&current_time,NULL);
+        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+        printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
         return n - size;
         // check the return value
     } else
@@ -651,7 +778,7 @@ int sfs_delete(char *filename)
                 read_block(buff, block_num + 9);
                 int index_block = (*(struct file_control_block *) (buff + 128 * block_offset)).index_block;
                 (*(struct file_control_block *) (buff + 128 * block_offset)).available = 0;
-                (*(struct file_control_block *) (buff + 128 * block_offset)).size = 0;
+                // (*(struct file_control_block *) (buff + 128 * block_offset)).size = 0;
 
                 write_block(buff, block_num + 9);
 
