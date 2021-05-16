@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/time.h>
 #include "simplefs.h"
 
 struct directory_item {
@@ -216,7 +217,7 @@ int create_format_vdisk (char *vdiskname, unsigned int m)
 
     gettimeofday(&current_time,NULL);
     double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-    printf("%s with size %lu is created in %lf miliseconds\n", vdiskname, 1 << m, end_time - begin_time);
+    printf("%s with size %u is created in %lf miliseconds\n", vdiskname, 1 << m, end_time - begin_time);
     return (0); 
 }
 
@@ -245,7 +246,7 @@ int sfs_mount (char *vdiskname)
 // already implemented
 int sfs_umount ()
 {
-    printf("unmount\n");
+    // printf("unmount\n");
     fsync (vdisk_fd); // copy everything in memory to disk
     close (vdisk_fd);
     return (0); 
@@ -461,9 +462,9 @@ int sfs_getsize (int  fd)
 }
 
 int sfs_read(int fd, void *buf, int n){
-    struct timeval current_time;
-    gettimeofday(&current_time,NULL);
-    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    // struct timeval current_time;
+    // gettimeofday(&current_time,NULL);
+    // double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
 
     if (open_file_table[fd].mode == MODE_READ){
         int inode = open_file_table[fd].inode;
@@ -495,9 +496,9 @@ int sfs_read(int fd, void *buf, int n){
         int initial_size = remain_size;
 
         if (remain_size == 0){
-            gettimeofday(&current_time,NULL);
-            double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-            printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);   
+            // gettimeofday(&current_time,NULL);
+            // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+            // printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);   
             return 0;
         }
 
@@ -508,7 +509,7 @@ int sfs_read(int fd, void *buf, int n){
             if(*(((int *)read_buff_index) + i) != -1){
                 read_block(read_buff, i);
                 // printf("remain read: %d, remain_size: %d\n", remain_read, remain_size);
-                if (remain_read <= remain_size){
+                if (remain_read < remain_size){
                     if (4096 - open_file_table[fd].offset <= remain_read){
                         // printf("IF - 1\n");
                         memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, 4096 - open_file_table[fd].offset);
@@ -521,13 +522,13 @@ int sfs_read(int fd, void *buf, int n){
                         memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, remain_read);
                         open_file_table[fd].offset = open_file_table[fd].offset + remain_read;
                         free(read_buff);
-                        gettimeofday(&current_time,NULL);
-                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                        printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                        // gettimeofday(&current_time,NULL);
+                        // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        // printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                         return n;
                     }
                 } else {
-                    if (remain_size >= 4096 - open_file_table[fd].offset){
+                    if (remain_size > 4096 - open_file_table[fd].offset){
                         // printf("IF - 3\n");
                         memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, 4096 - open_file_table[fd].offset);
                         remain_size -= 4096 - open_file_table[fd].offset; 
@@ -539,9 +540,9 @@ int sfs_read(int fd, void *buf, int n){
                         memcpy(buf + (n - remain_read), read_buff + open_file_table[fd].offset, remain_size);
                         open_file_table[fd].offset += remain_size;
                         free(read_buff);
-                        gettimeofday(&current_time,NULL);
-                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                        printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                        // gettimeofday(&current_time,NULL);
+                        // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        // printf("Reading %d size from file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                         return initial_size;
                     }
                 }
@@ -559,9 +560,9 @@ int sfs_read(int fd, void *buf, int n){
 
 int sfs_append(int fd, void *buf, int n)
 {
-    struct timeval current_time;
-    gettimeofday(&current_time,NULL);
-    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    // struct timeval current_time;
+    // gettimeofday(&current_time,NULL);
+    // double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
 
     if (open_file_table[fd].mode == MODE_APPEND){
         int inode = open_file_table[fd].inode;
@@ -634,9 +635,9 @@ int sfs_append(int fd, void *buf, int n)
 
                         free(file_writer);
                         free(buff);
-                        gettimeofday(&current_time,NULL);
-                        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                        printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                        // gettimeofday(&current_time,NULL);
+                        // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                        // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                         return n;
                     }
                     else{
@@ -696,9 +697,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-                gettimeofday(&current_time,NULL);
-                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                // gettimeofday(&current_time,NULL);
+                // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n-size;
             }
             
@@ -710,9 +711,9 @@ int sfs_append(int fd, void *buf, int n)
 
             free(file_writer);
             free(buff);
-            gettimeofday(&current_time,NULL);
-            double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-            printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+            // gettimeofday(&current_time,NULL);
+            // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+            // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
             return n;
         }
        
@@ -730,9 +731,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-                gettimeofday(&current_time,NULL);
-                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                // gettimeofday(&current_time,NULL);
+                // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n - size;
             }else{
                 memcpy(file_writer + open_file_table[fd].offset, buf + n - size, size);
@@ -741,9 +742,9 @@ int sfs_append(int fd, void *buf, int n)
 
                 free(file_writer);
                 free(buff);
-                gettimeofday(&current_time,NULL);
-                double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-                printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+                // gettimeofday(&current_time,NULL);
+                // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+                // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
                 return n;
             }
 
@@ -751,9 +752,9 @@ int sfs_append(int fd, void *buf, int n)
         }
 
         free(buff);
-        gettimeofday(&current_time,NULL);
-        double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
-        printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
+        // gettimeofday(&current_time,NULL);
+        // double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+        // printf("Appending %d size to file with fd: %d in %lf miliseconds\n", n, fd, end_time - begin_time);
         return n - size;
         // check the return value
     } else

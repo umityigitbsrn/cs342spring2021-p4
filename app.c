@@ -125,20 +125,25 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/time.h>
 #include "simplefs.h"
 
 int main(int argc, char **argv)
 {
-    int ret;
-    int fd1, fd2, fd; 
-    int i;
-    // char c; 
-    char buffer[1024];
-    char buffer_n[10000];
-    char buffer_n2[15000];
-    char buffer2[8] = {50, 50, 50, 50, 50, 50, 50, 50};
-    // int size;
-    char vdiskname[200]; 
+    // int ret;
+    // int fd1, fd2, fd; 
+    // int i;
+    // // char c; 
+    // char buffer[1024];
+    // char buffer_n[10000];
+    // char buffer_n2[15000];
+    // char buffer2[8] = {50, 50, 50, 50, 50, 50, 50, 50};
+    // // int size;
+
+    int fd, ret, i, append_count = 0, read_count = 0;
+    char vdiskname[200];
+    char write_buff[64];
+    char read_buff[64]; 
 
     printf ("started\n");
 
@@ -148,68 +153,108 @@ int main(int argc, char **argv)
     }
     strcpy (vdiskname, argv[1]); 
     
+    for (i = 0; i < 64; ++i){
+        write_buff[i] = (char) i;
+    }
+
     ret = sfs_mount (vdiskname);
     if (ret != 0) {
         printf ("could not mount \n");
         exit (1);
     }
 
-    printf ("creating files\n"); 
-    sfs_create ("file1.bin");
-    sfs_create ("file2.bin");
-    sfs_create ("file3.bin");
+    sfs_create("file.bin");
 
-    fd1 = sfs_open ("file1.bin", MODE_APPEND);
-    fd2 = sfs_open ("file2.bin", MODE_APPEND);
-    for (i = 0; i < 10000; ++i) {
-        buffer[0] =   (char) 65;
-        sfs_append (fd1, (void *) buffer, 1);
+    fd = sfs_open("file.bin", MODE_APPEND);
+
+    struct timeval current_time;
+    gettimeofday(&current_time,NULL);
+    double begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+
+    for (i = 0; i < 128; ++i){
+        append_count += sfs_append(fd, write_buff, 64);
     }
 
-    sfs_close(fd1);
+    gettimeofday(&current_time,NULL);
+    double end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    printf("Appending %d size to file with fd: %d in %lf miliseconds\n", append_count, fd, end_time - begin_time);
 
-    fd1 = sfs_open("file1.bin", MODE_READ);
+    sfs_close(fd);
 
-    printf("Read size for file1.bin: %d byte.\n", sfs_read(fd1, buffer_n2, 15000));
+    sfs_open("file.bin", MODE_READ);
 
-    for (i = 0; i < 10000; ++i) {
-        buffer[0] = (char) 65;
-        buffer[1] = (char) 66;
-        buffer[2] = (char) 67;
-        buffer[3] = (char) 68;
-        sfs_append(fd2, (void *) buffer, 4);
+    gettimeofday(&current_time,NULL);
+    begin_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+
+    for (i = 0; i < 128; ++i){
+        read_count += sfs_read(fd, read_buff, 64);
     }
+
+    gettimeofday(&current_time,NULL);
+    end_time = current_time.tv_usec * 0.001 + (current_time.tv_sec * 1000);
+    printf("Reading %d size from file with fd: %d in %lf miliseconds\n", append_count, fd, end_time - begin_time);
+
+    // sfs_close(fd);
     
-    sfs_close(fd1);
-    sfs_close(fd2);
+    // sfs_delete("file.bin");
+    sfs_umount();
 
-    fd = sfs_open("file3.bin", MODE_APPEND);
-    for (i = 0; i < 10000; ++i) {
-        memcpy (buffer, buffer2, 8); // just to show memcpy
-        sfs_append(fd, (void *) buffer, 8);
-    }
-    sfs_close (fd);
+    // printf ("creating files\n"); 
+    // sfs_create ("file1.bin");
+    // sfs_create ("file2.bin");
+    // sfs_create ("file3.bin");
 
-    fd = sfs_open("file3.bin", MODE_READ);
-    // size = sfs_getsize (fd);
-    // for (i = 0; i < size; ++i) {
-    //     sfs_read (fd, (void *) buffer, 1);
-    //     c = (char) buffer[0];
-    //     c = c + 1;
+    // fd1 = sfs_open ("file1.bin", MODE_APPEND);
+    // fd2 = sfs_open ("file2.bin", MODE_APPEND);
+    // for (i = 0; i < 10000; ++i) {
+    //     buffer[0] =   (char) 65;
+    //     sfs_append (fd1, (void *) buffer, 1);
     // }
 
-    for (int umit = 0; umit < 12; umit++){
-        printf("Read output: %d\n", sfs_read(fd, buffer_n, 8000));
-    }
+    // sfs_close(fd1);
 
-    printf("exit\n");
+    // fd1 = sfs_open("file1.bin", MODE_READ);
 
-    sfs_close (fd);
+    // printf("Read size for file1.bin: %d byte.\n", sfs_read(fd1, buffer_n2, 15000));
 
-    sfs_delete("file1.bin");
-    sfs_delete("file2.bin");
-    sfs_delete("file3.bin");
+    // for (i = 0; i < 10000; ++i) {
+    //     buffer[0] = (char) 65;
+    //     buffer[1] = (char) 66;
+    //     buffer[2] = (char) 67;
+    //     buffer[3] = (char) 68;
+    //     sfs_append(fd2, (void *) buffer, 4);
+    // }
+    
+    // sfs_close(fd1);
+    // sfs_close(fd2);
 
-    printf("close\n");
-    ret = sfs_umount();
+    // fd = sfs_open("file3.bin", MODE_APPEND);
+    // for (i = 0; i < 10000; ++i) {
+    //     memcpy (buffer, buffer2, 8); // just to show memcpy
+    //     sfs_append(fd, (void *) buffer, 8);
+    // }
+    // sfs_close (fd);
+
+    // fd = sfs_open("file3.bin", MODE_READ);
+    // // size = sfs_getsize (fd);
+    // // for (i = 0; i < size; ++i) {
+    // //     sfs_read (fd, (void *) buffer, 1);
+    // //     c = (char) buffer[0];
+    // //     c = c + 1;
+    // // }
+
+    // for (int umit = 0; umit < 12; umit++){
+    //     printf("Read output: %d\n", sfs_read(fd, buffer_n, 8000));
+    // }
+
+    // printf("exit\n");
+
+    // sfs_close (fd);
+
+    // sfs_delete("file1.bin");
+    // sfs_delete("file2.bin");
+    // sfs_delete("file3.bin");
+
+    // printf("close\n");
+    // ret = sfs_umount();
 }
